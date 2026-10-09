@@ -56,7 +56,7 @@ main{padding:22px 0 60px}
 .row{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .grid-fields{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px;margin-top:12px}
 label.f{display:flex;flex-direction:column;gap:4px;font-size:.875rem;color:var(--muted)}
-input[type=text],input[type=number],select,textarea,input:not([type]){background:var(--sunk);border:1px solid var(--line);border-radius:var(--radius-s);padding:8px 10px;color:var(--ink);min-width:0;width:100%}
+input[type=text],input[type=number],input[type=password],select,textarea,input:not([type]){background:var(--sunk);border:1px solid var(--line);border-radius:var(--radius-s);padding:8px 10px;color:var(--ink);min-width:0;width:100%}
 textarea{min-height:110px;resize:vertical;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:.9rem}
 input[type=range]{width:100%;accent-color:var(--pencil)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:9px 16px;cursor:pointer;font-weight:700;text-decoration:none;color:var(--ink)}
@@ -186,6 +186,9 @@ table.res tbody tr:hover{background:var(--sunk)}
 @keyframes pulse{50%{box-shadow:0 0 0 6px rgba(61,220,132,0)}}
 .st.virt{background:#E4ECFB;color:#1F4FBF}
 .quiz-card{border-left:5px solid var(--pencil)}
+.pdf-chip{display:inline-block;background:var(--sunk);border:1px solid var(--line);border-radius:8px;padding:6px 10px;font-size:.85rem;font-weight:700}
+.qz-nopdf{display:flex;align-items:center;justify-content:center;padding:30px;text-align:center;background:var(--sunk)}
+.qz-nopdf div{max-width:360px}
 .quiz-card.off{border-left-color:var(--blank);opacity:.85}
 /* ---- examen virtual (alumno) ---- */
 .qz-land{min-height:100vh;display:flex;flex-direction:column;align-items:center;padding:0 16px 40px}
@@ -1579,7 +1582,7 @@ const LocalAuth = (() => {
     // la contraseña más reciente de cada usuario gana (así un tutor conserva la clave que cambió en su equipo)
     if (db && both[1]) db.users.forEach(x => { const o = both[1].users.find(y => y.u === x.u); if (o && (o.pwAt || 0) > (x.pwAt || 0)) Object.assign(x, { salt: o.salt, hash: o.hash, mustChange: o.mustChange, pwAt: o.pwAt }); });
     if (!db || !db.users.some(x => x.role === 'admin' && x.active)) {
-      db = { updated: 0, users: [await makeUser('administrador', 'Administrador', 'admin', '123456', true)] };
+      db = { updated: 0, users: [await makeUser('administrador', 'Administrador', 'admin', 'administrador', true)] };
     }
     saveLocal();
     try { const s = JSON.parse(sessionStorage.getItem(SS_SESSION) || 'null'); if (s && s.exp > Date.now() && db.users.some(x => x.u === s.u && x.active)) session = s; } catch (e) { }
@@ -1891,7 +1894,7 @@ const CloudAuth = (() => {
     if (!/^[a-z0-9._-]{3,30}$/.test(norm(u))) return 'El usuario debe tener de 3 a 30 caracteres: letras, números, punto o guion.';
     const e = LocalAuth.checkPw(pass); if (e) return e;
     const { data, error } = await sb().auth.signUp({ email: mail(u), password: pass });
-    if (error) return 'Supabase no aceptó la cuenta: ' + error.message;
+    if (error) return /signups? (are|is) disabled|signup.*disabled/i.test(error.message) ? 'Supabase tiene desactivado el registro de usuarios. En Authentication › Sign In / Providers activa "Allow new users to sign up" y el proveedor Email (deja apagado solo "Confirm email").' : 'Supabase no aceptó la cuenta: ' + error.message;
     if (!data.session) return 'La cuenta se creó pero falta confirmarla. En Supabase › Authentication › Sign In / Providers › Email, desactiva "Confirm email" y vuelve a intentarlo con otro usuario.';
     const { data: r, error: e2 } = await sb().rpc('registrar_primer_admin', { p_usuario: norm(u), p_nombre: name || u });
     if (e2 || (r && r.error)) return 'No se pudo registrar el administrador: ' + (e2 ? e2.message : r.error);
@@ -1923,7 +1926,7 @@ const CloudAuth = (() => {
     // un cliente aparte para no cerrar la sesión del administrador
     const c2 = await Cloud.client(Cloud.cfg, { persistSession: false, autoRefreshToken: false, storageKey: 'lc_sb_tmp', storage: undefined });
     const { data, error } = await c2.auth.signUp({ email: mail(u), password });
-    if (error) return /registered/i.test(error.message) ? 'Ese usuario ya existe en Supabase.' : 'Supabase no aceptó la cuenta: ' + error.message;
+    if (error) return /registered/i.test(error.message) ? 'Ese usuario ya existe en Supabase.' : /signups? (are|is) disabled|signup.*disabled/i.test(error.message) ? 'Supabase tiene desactivado el registro de usuarios. En Authentication › Sign In / Providers activa "Allow new users to sign up" y el proveedor Email.' : 'Supabase no aceptó la cuenta: ' + error.message;
     if (!data.user) return 'Supabase no devolvió el usuario creado.';
     const { error: e2 } = await sb().from('perfiles').insert({ id: data.user.id, usuario: u, nombre: (name || '').trim() || u, rol: role, debe_cambiar: true });
     if (e2) return 'No se pudo guardar el perfil: ' + e2.message;
@@ -1983,7 +1986,7 @@ function setupAdminView() {
 
 /* ---------- Panel de conexión con la nube (administrador) ---------- */
 function cloudPanel() {
-  const c = Cloud.cfg || {};
+  const c = S.cfgDraft || Cloud.cfg || {};
   return `<div class="panel"><h3>Conexión con la nube (Supabase)</h3>
     ${Cloud.on ? `<p class="small"><span class="live-dot"></span> Conectado a <b>${esc(c.supabaseUrl)}</b>${c.from === 'archivo' ? ' mediante el config.json publicado.' : ' solo en este navegador. Descarga config.json y súbelo a GitHub para que todos usen la nube.'}</p>`
       : `<p class="small">Ahora mismo los datos se guardan solo en este navegador. Conecta Supabase para que todos los tutores compartan evaluaciones, resultados y exámenes virtuales en tiempo real.</p>`}
@@ -2027,6 +2030,8 @@ function virtualView(ex) {
   const qs = Object.values(S.quizzes).filter(q => q.exam_id === ex.id).sort((a, b) => a.creado < b.creado ? -1 : 1);
   const keyN = ex.key.filter(Boolean).length;
   const now = Date.now();
+  if (!S.qForm || S.qForm.ex !== ex.id) S.qForm = { ex: ex.id };
+  const F = S.qForm;
   const cards = qs.map(q => {
     const its = (S.intentos[q.id] || []).slice().sort((a, b) => a.inicio < b.inicio ? -1 : 1);
     const sent = its.filter(t => t.enviado).length, live = its.filter(t => !t.enviado && new Date(t.fin_limite) > now).length, late = its.filter(t => !t.enviado && new Date(t.fin_limite) <= now).length;
@@ -2047,6 +2052,8 @@ function virtualView(ex) {
         <button class="btn sm primary" data-act="qcopy" data-id="${q.id}">Copiar enlace</button><a class="btn sm" href="${esc(quizLink(q))}" target="_blank" rel="noopener">Abrir vista del alumno</a></div>
       <div class="kpis" style="margin:12px 0"><div class="kpi"><b>${its.length}</b><span>iniciaron</span></div><div class="kpi"><b>${live}</b><span>en curso</span></div><div class="kpi"><b>${sent}</b><span>enviados</span></div><div class="kpi"><b>${late}</b><span>vencidos sin enviar</span></div></div>
       ${its.length ? `<div class="scroll-x"><table class="res"><thead><tr><th>Alumno</th><th>Estado</th><th>Respondidas</th><th>Nota</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="muted small">Todavía nadie inició este examen.</p>`}
+      <div class="row" style="margin-top:10px;align-items:center">${q.pdf_url ? `<a class="btn sm" href="${esc(q.pdf_url)}" target="_blank" rel="noopener">Ver PDF</a>` : '<span class="small" style="color:var(--warn);font-weight:700">Sin PDF de preguntas</span>'}
+        <label class="btn sm">${q.pdf_url ? 'Cambiar PDF' : 'Subir PDF'}<input type="file" accept="application/pdf,.pdf" class="hidden" data-qfile="${q.id}"></label></div>
       <div class="row" style="margin-top:10px">${late ? `<button class="btn sm" data-act="qclose" data-id="${q.id}">Calificar los ${late} vencidos</button>` : ''}<button class="btn sm danger" data-act="qdel" data-id="${q.id}">Eliminar examen virtual</button></div>
     </div>`;
   }).join('');
@@ -2054,30 +2061,53 @@ function virtualView(ex) {
       <p class="muted small">Los alumnos abren el enlace, escriben su nombre y DNI y responden en línea con tiempo límite. Se califica con la clave, cursos y puntajes de esta evaluación, y el resultado entra a <b>Resultados</b> junto con las hojas escaneadas.</p>
       ${keyN < ex.nQ ? `<div class="note bad small">La clave tiene ${keyN} de ${ex.nQ} respuestas. Complétala en Configurar antes de que los alumnos envíen (se puede corregir después: las notas se recalculan).</div>` : ''}
       <div class="grid-fields">
-        <label class="f" style="grid-column:span 2">Nombre del examen<input type="text" id="qTitle" value="${esc(ex.name)}"></label>
-        <label class="f">Duración (minutos)<input type="number" id="qMin" min="1" max="600" value="60"></label>
-        <label class="f">PDF con las preguntas (opcional)<input type="file" id="qPdf" accept="application/pdf"></label>
+        <label class="f" style="grid-column:span 2">Nombre del examen<input type="text" id="qTitle" value="${esc(F.title ?? ex.name)}" data-qform="title"></label>
+        <label class="f">Duración (minutos)<input type="number" id="qMin" min="1" max="600" value="${esc(F.min ?? 60)}" data-qform="min"></label>
+        <div class="f"><span>PDF con las preguntas</span>${F.file ? `<div class="row" style="gap:6px"><span class="pdf-chip">📄 ${esc(F.file.name)} · ${(F.file.size / 1048576).toFixed(1)} MB</span><button class="btn sm ghost" data-act="qnofile">Quitar</button></div>` : `<label class="btn sm" style="align-self:flex-start">Elegir PDF<input type="file" id="qPdf" accept="application/pdf,.pdf" class="hidden" data-qfile="new"></label>`}</div>
       </div>
-      <label class="switch" style="margin-top:10px"><input type="checkbox" id="qShow" checked>Mostrar la nota al alumno al terminar</label>
+      ${!F.file ? `<p class="small" style="color:var(--warn);font-weight:700;margin:8px 0 0">Sin PDF, el alumno solo verá la hoja de respuestas (útil si las preguntas se entregan impresas).</p>` : ''}
+      <label class="switch" style="margin-top:10px"><input type="checkbox" id="qShow" ${F.show === false ? '' : 'checked'} data-qform="show">Mostrar la nota al alumno al terminar</label>
       <div class="row" style="margin-top:12px"><button class="btn primary" data-act="qcreate">Crear examen virtual</button></div>
     </div>${cards || ''}`;
 }
+async function uploadPdf(file) {
+  if (!/pdf$/i.test(file.type) && !/\.pdf$/i.test(file.name)) { toast('El archivo debe ser PDF.'); return null; }
+  if (file.size > 45 * 1024 * 1024) { toast('El PDF pesa más de 45 MB. Comprímelo e inténtalo de nuevo.'); return null; }
+  const path = `quiz/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.pdf`;
+  const up = await Cloud.sb.storage.from('examenes').upload(path, file, { contentType: 'application/pdf', upsert: false });
+  if (up.error) { toast('No se pudo subir el PDF: ' + up.error.message + (/bucket/i.test(up.error.message) ? ' (vuelve a ejecutar el script SQL en Supabase)' : '')); return null; }
+  return Cloud.sb.storage.from('examenes').getPublicUrl(path).data.publicUrl;
+}
+// guarda el formulario y el PDF elegido para que no se borren al refrescar la pantalla
+document.addEventListener('input', e => { const t = e.target; if (t.dataset && t.dataset.qform && S.qForm) S.qForm[t.dataset.qform] = t.type === 'checkbox' ? t.checked : t.value; });
+document.addEventListener('change', async e => {
+  const t = e.target; if (!t.dataset) return;
+  if (t.dataset.qform && S.qForm) S.qForm[t.dataset.qform] = t.type === 'checkbox' ? t.checked : t.value;
+  if (!t.dataset.qfile) return;
+  const f = t.files && t.files[0]; t.value = ''; if (!f) return;
+  if (t.dataset.qfile === 'new') { if (S.qForm) S.qForm.file = f; render(); return; }
+  const q = S.quizzes[t.dataset.qfile]; if (!q) return;
+  toast('Subiendo PDF…');
+  const url = await uploadPdf(f); if (!url) return;
+  const { error } = await Cloud.sb.from('quizzes').update({ pdf_url: url }).eq('id', q.id);
+  if (error) { toast('No se pudo guardar: ' + error.message); return; }
+  q.pdf_url = url; toast('PDF listo. Los alumnos que entren ahora lo verán (los que ya están dentro deben recargar).'); render();
+});
 function fmtLeft(ms) { const s = Math.ceil(ms / 1000), h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), x = s % 60; return h ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m ${String(x).padStart(2, '0')}s`; }
 async function quizAction(act, el, ex) {
   const sb = Cloud.sb;
   if (act === 'qcreate') {
-    const titulo = $('#qTitle').value.trim() || ex.name, minutos = Math.max(1, Math.min(600, +$('#qMin').value || 60)), file = $('#qPdf').files[0];
+    const F = S.qForm || {}, titulo = ($('#qTitle').value || '').trim() || ex.name, minutos = Math.max(1, Math.min(600, +$('#qMin').value || 60)), file = F.file;
     const btn = el; btn.disabled = true; btn.textContent = 'Creando…';
     let pdf_url = null;
     if (file) {
-      if (file.size > 45 * 1024 * 1024) { toast('El PDF pesa más de 45 MB. Comprímelo e inténtalo de nuevo.'); render(); return; }
-      const path = `quiz/${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.pdf`;
-      const up = await sb.storage.from('examenes').upload(path, file, { contentType: 'application/pdf', upsert: false });
-      if (up.error) { toast('No se pudo subir el PDF: ' + up.error.message); render(); return; }
-      pdf_url = sb.storage.from('examenes').getPublicUrl(path).data.publicUrl;
+      btn.textContent = 'Subiendo PDF…';
+      pdf_url = await uploadPdf(file);
+      if (!pdf_url) { render(); return; }
     }
     Store.put('exam', ex); // la nube necesita la evaluación (clave) para calificar
     const { data, error } = await sb.from('quizzes').insert({ exam_id: ex.id, titulo, minutos, n_preguntas: ex.nQ, pdf_url, mostrar_nota: $('#qShow').checked }).select().single();
+    if (!error) S.qForm = { ex: ex.id };
     if (error) { toast('No se pudo crear: ' + error.message); render(); return; }
     S.quizzes[data.id] = data; S.intentos[data.id] = [];
     toast('Examen virtual creado. Copia el enlace y compártelo con tus alumnos.'); render(); return;
@@ -2244,7 +2274,7 @@ const Quiz = {
       <div class="qz-body">
         <aside class="qz-sheet"><div class="qz-sheet-head"><span>Hoja de respuestas</span><span class="small muted"><span id="${mob && q.pdf_url ? 'qzCount2' : 'qzCount'}">${this.ans.filter(Boolean).length}</span>/${this.ans.length}</span></div>${rows}
           <p class="small muted" style="padding:8px 4px">Toca una letra para marcarla; tócala otra vez para borrarla.</p></aside>
-        ${q.pdf_url ? `<section class="qz-pdf" id="qzPdf"><p class="muted small">Cargando preguntas…</p></section>` : ''}
+        ${q.pdf_url ? `<section class="qz-pdf" id="qzPdf"><p class="small" style="color:#E6E9EB">Cargando preguntas…</p></section>` : `<section class="qz-nopdf"><div><b>Este examen no tiene preguntas en línea.</b><p class="muted small">Responde en la hoja de respuestas con las preguntas que te entregó tu profesor.</p></div></section>`}
       </div>
       <footer class="qz-foot small" id="qzSave">${esc(this.saving || 'Tus respuestas se guardan solas.')}</footer></div>`;
     this.tick();
@@ -3352,6 +3382,15 @@ function detailView() {
     </div></div></div>`;
 }
 
+// Acepta la URL del proyecto aunque se pegue con /rest/v1, con / al final o el enlace del panel de Supabase
+function normalizeSbUrl(u) {
+  u = String(u || '').trim().replace(/^["']|["']$/g, '');
+  const dash = u.match(/supabase\.com\/dashboard\/project\/([a-z0-9]+)/i);
+  if (dash) return `https://${dash[1].toLowerCase()}.supabase.co`;
+  if (/^[a-z0-9]{15,30}$/i.test(u)) return `https://${u.toLowerCase()}.supabase.co`;
+  if (!/^https?:\/\//i.test(u)) u = 'https://' + u;
+  try { const x = new URL(u); return x.hostname.includes('.') ? 'https://' + x.host : ''; } catch (e) { return ''; }
+}
 /* ===== Exportar ===== */
 // Datos para el Excel del salón (dashboard, por curso, por estudiante)
 function excelData(ex) {
@@ -3396,6 +3435,7 @@ document.addEventListener('click', async e => {
     case 'login': return doLogin();
     case 'logout': S.page = ''; S.cur = null; S.grp = null; S.detail = null; Auth.logout(); break;
     case 'page': S.authErr = ''; S.cloudErr = ''; S.page = el.dataset.p; if (S.page) { Cam.stop(); S.detail = null; } render(); window.scrollTo(0, 0); if (S.page === 'users' && Auth.cloud) Auth.loadUsers().then(render); break;
+    case 'qnofile': if (S.qForm) S.qForm.file = null; render(); break;
     case 'qcreate': case 'qcopy': case 'qclose': case 'qdel': case 'qdelint': await quizAction(act, el, ex); break;
     case 'setupadmin': {
       const p1 = $('#saPass').value, p2 = $('#saPass2').value;
@@ -3407,8 +3447,12 @@ document.addEventListener('click', async e => {
     case 'copysql': try { await navigator.clipboard.writeText(SETUP_SQL); toast('Script copiado. Pégalo en Supabase › SQL Editor.'); } catch (e2) { toast('No se pudo copiar; usa "Descargar script SQL".'); } break;
     case 'dlsql': saveFile('supabase-setup.sql', SETUP_SQL); break;
     case 'cloudconnect': {
-      const cfg = { supabaseUrl: $('#cfgUrl').value.trim(), supabaseKey: $('#cfgKey').value.trim() };
-      if (!/^https:\/\/.+/.test(cfg.supabaseUrl) || cfg.supabaseKey.length < 30) { S.cloudErr = 'Pega la Project URL (https://...) y la clave anon public.'; render(); break; }
+      const rawUrl = $('#cfgUrl').value.trim(), rawKey = $('#cfgKey').value.trim();
+      S.cfgDraft = { supabaseUrl: rawUrl, supabaseKey: rawKey };
+      const cfg = { supabaseUrl: normalizeSbUrl(rawUrl), supabaseKey: rawKey.replace(/^["'\s]+|["'\s,;]+$/g, '') };
+      if (!cfg.supabaseUrl || cfg.supabaseKey.length < 30) { S.cloudErr = 'Pega la Project URL (https://xxxx.supabase.co) y la clave anon public completa.'; render(); break; }
+      if (/service_role|sb_secret_/.test(cfg.supabaseKey) || (() => { try { return JSON.parse(atob(cfg.supabaseKey.split('.')[1])).role === 'service_role'; } catch (e) { return false; } })()) { S.cloudErr = 'Esa es la clave service_role (secreta). Usa la clave anon public.'; render(); break; }
+      S.cfgDraft = { ...cfg };
       el.disabled = true; el.textContent = 'Probando…';
       const err = await Cloud.test(cfg);
       if (err) { S.cloudErr = err; render(); break; }
