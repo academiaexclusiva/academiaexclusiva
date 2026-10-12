@@ -125,7 +125,7 @@ begin
     mx := mx + pts;
     if k = '*' then sc := sc + pts; c := c + 1;
     elsif a = '' then sc := sc + coalesce((sec->>'blank')::numeric, 0); b := b + 1;
-    elsif length(a) > 1 or a <> k then sc := sc + coalesce((sec->>'wrong')::numeric, 0); w := w + 1;
+    elsif length(a) > 1 or position(a in k) = 0 then sc := sc + coalesce((sec->>'wrong')::numeric, 0); w := w + 1;
     else sc := sc + pts; c := c + 1; end if;
   end loop;
   return jsonb_build_object('puntaje', sc, 'maximo', mx, 'correctas', c, 'incorrectas', w, 'blanco', b,
