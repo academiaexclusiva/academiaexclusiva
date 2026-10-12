@@ -272,4 +272,14 @@ create policy "examenes_editar" on storage.objects for update to authenticated u
 drop policy if exists "examenes_borrar" on storage.objects;
 create policy "examenes_borrar" on storage.objects for delete to authenticated using (bucket_id = 'examenes' and public.es_activo());
 
+-- ---------- Permisos de acceso (los proyectos nuevos de Supabase ya no los dan solos) ----------
+grant usage on schema public to anon, authenticated;
+grant select, insert, update, delete on public.perfiles, public.docs, public.quizzes, public.intentos to authenticated;
+grant select on public.quizzes to anon;
+grant execute on function public.es_activo(), public.es_admin(), public.hay_admin(),
+  public.calificar(jsonb, jsonb), public.cerrar_vencidos(uuid), public.registrar_primer_admin(text, text),
+  public.marcar_clave_cambiada(), public.admin_cambiar_clave(uuid, text), public.admin_eliminar_usuario(uuid) to authenticated;
+grant execute on function public.hay_admin(), public.iniciar_intento(uuid, text, text, uuid),
+  public.guardar_respuestas(uuid, uuid, jsonb), public.enviar_intento(uuid, uuid, jsonb) to anon, authenticated;
+
 -- Listo. Vuelve al programa y crea la cuenta de administrador.
