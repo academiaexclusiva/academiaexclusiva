@@ -190,6 +190,9 @@ table.res tbody tr:hover{background:var(--sunk)}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--graphite);color:#fff;padding:10px 18px;border-radius:999px;z-index:80;font-weight:700;box-shadow:0 8px 20px rgba(0,0,0,.25);max-width:90vw;text-align:center}
 .hidden{display:none!important}
 #printArea{display:none}
+.base-panel{border-left:5px solid #2F6FDE}
+.count-pill{display:inline-block;font-family:var(--body);font-size:.8rem;font-weight:700;background:var(--sunk);border:1px solid var(--line);border-radius:999px;padding:1px 10px;vertical-align:middle;margin-left:4px}
+.base-list summary{cursor:pointer;font-weight:700;margin-top:10px}
 .type-badge.ien{background:#1B2A44;color:#fff;border-color:#1B2A44}
 .exam-card.ien{border-top:4px solid #EF7B1A}
 .choose-card.ien{border-color:#EF7B1A}
@@ -2429,7 +2432,7 @@ function layoutOf(ex) { const k = ex.nQ + '_' + ex.idDigits; return layoutCache[
 
 function newExam(example) {
   const n = Object.keys(S.exams).length;
-  const e = { id: uid(), name: 'Evaluación ' + (n + 1), nQ: 50, idDigits: 6, scale: 20, pass: 11, thr: 0.40, sens: 0.15, autoThr: true, sections: [], key: Array(50).fill(''), ptsOv: {}, roster: '', created: Date.now() };
+  const e = { id: uid(), name: 'Evaluación ' + (n + 1), nQ: 50, idDigits: baseMaxLen() || 6, scale: 20, pass: 11, thr: 0.40, sens: 0.15, autoThr: true, sections: [], key: Array(50).fill(''), ptsOv: {}, roster: '', created: Date.now() };
   if (example) {
     e.name = 'Simulacro de ejemplo';
     const names = ['Aritmética', 'Álgebra', 'Geometría', 'Razonamiento verbal', 'Razonamiento matemático'];
@@ -2472,7 +2475,7 @@ const isIEN = ex => ex && ex.type === 'ien';
 const prOf = (ex, id) => (ex.pruebas || []).findIndex(p => p.id === id);
 
 function newGroup(example) {
-  const n = Object.values(S.groups).length;
+  const n = realGroups().length;
   const g = { id: uid(), type: 'uni', name: example ? 'Simulacro UNI de ejemplo' : 'Simulacro UNI ' + (n + 1), exams: [], pass: 11, created: Date.now() };
   for (let k = 0; k < 3; k++) {
     const e = newExam(false);
@@ -2653,20 +2656,20 @@ async function importStudents(file, exams) {
   if (r.err) { toast(r.err); return; }
   const ok = r.list.filter(x => !x.bad), bad = r.list.filter(x => x.bad);
   if (!ok.length) { toast('No encontré alumnos con DNI y nombre en el archivo.'); return; }
-  // se combina con la lista actual: agrega nuevos y actualiza los nombres de los que ya estaban
-  const cur = rosterMap(exams[0]); let added = 0, upd = 0;
+  // se guarda en la base general: agrega nuevos y actualiza los nombres de los que ya estaban
+  const cur = { ...baseMap() }; let added = 0, upd = 0;
   ok.forEach(x => { if (cur[x.dni] === undefined) added++; else if (cur[x.dni] !== x.name) upd++; cur[x.dni] = x.name; });
-  const text = Object.entries(cur).map(([k, v]) => `${k}, ${v}`).join('\n');
+  saveBase(cur);
   const maxLen = Math.max(...ok.map(x => x.dni.length));
-  exams.forEach(ex => { ex.roster = text; });
-  const short = exams.filter(ex => ex.idDigits < maxLen);
+  const short = exams.filter(ex => ex && ex.idDigits < maxLen);
   if (short.length && confirm(`Los DNI tienen ${maxLen} dígitos, pero la hoja tiene espacio para ${short[0].idDigits}. ¿Cambiar el código de la hoja a ${maxLen} dígitos?\n\nSi ya imprimiste hojas de esta evaluación, tendrás que imprimirlas de nuevo.`)) {
     short.forEach(ex => { ex.idDigits = maxLen; });
   }
-  exams.forEach(ex => Store.put('exam', ex));
+  exams.forEach(ex => ex && Store.put('exam', ex));
+  const filled = fillNames();
   render();
   const pl = (n, a, b) => `${n} ${n === 1 ? a : b}`;
-  toast(`${pl(added, 'alumno agregado', 'alumnos agregados')}${upd ? `, ${pl(upd, 'actualizado', 'actualizados')}` : ''}${bad.length ? `. ${pl(bad.length, 'fila omitida', 'filas omitidas')} (sin DNI numérico o sin nombre)` : ''}.`);
+  toast(`Base de alumnos: ${pl(added, 'alumno agregado', 'alumnos agregados')}${upd ? `, ${pl(upd, 'actualizado', 'actualizados')}` : ''} · total ${Object.keys(baseMap()).length}${filled ? ` · ${pl(filled, 'nombre completado', 'nombres completados')} en hojas ya escaneadas` : ''}${bad.length ? ` · ${pl(bad.length, 'fila omitida', 'filas omitidas')} (sin DNI numérico o sin nombre)` : ''}.`);
 }
 async function rosterTemplate() {
   const B = new XL.Book(), sh = B.sheet('Alumnos');
@@ -2677,10 +2680,49 @@ async function rosterTemplate() {
   await saveFile('plantilla-alumnos.xlsx', new Blob([B.build({ title: 'Plantilla de alumnos' })], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
 }
 
-function rosterMap(ex) {
-  const m = {};
-  (ex.roster || '').split(/\n/).forEach(l => { const p = l.match(/^\s*([^,;\t]+)[,;\t](.*)$/); if (p && p[1].trim()) m[p[1].trim()] = p[2].trim(); });
-  return m;
+/* ===== Base general de alumnos: se carga una vez y sirve para todas las evaluaciones ===== */
+const BASE_ID = 'alumnos';
+const parseRoster = txt => { const m = {}; String(txt || '').split(/\n/).forEach(l => { const p = l.match(/^\s*([^,;\t]+)[,;\t](.*)$/); if (p && p[1].trim()) m[p[1].trim()] = p[2].trim(); }); return m; };
+const rosterText = m => Object.entries(m).sort((a, b) => a[1].localeCompare(b[1], 'es')).map(([k, v]) => `${k}, ${v}`).join('\n');
+const baseDoc = () => S.groups[BASE_ID] && S.groups[BASE_ID].type === 'roster' ? S.groups[BASE_ID] : null;
+const baseMap = () => (baseDoc() ? baseDoc().list : null) || {};
+const realGroups = () => Object.values(S.groups).filter(g => g && g.type !== 'roster');
+const baseMaxLen = () => Math.max(0, ...Object.keys(baseMap()).map(k => k.length));
+function saveBase(map) {
+  const doc = { id: BASE_ID, type: 'roster', list: map, updated: Date.now(), created: (baseDoc() || {}).created || Date.now() };
+  S.groups[BASE_ID] = doc; Store.put('grp', doc);
+}
+// La lista de una evaluación = base general + alumnos agregados solo para esa evaluación
+function rosterMap(ex) { return { ...baseMap(), ...parseRoster(ex && ex.roster) }; }
+// Completa el nombre en hojas ya escaneadas que tenían DNI pero no nombre
+function fillNames() {
+  let n = 0;
+  Object.values(S.results).forEach(r => {
+    if (r.name || !r.studentId) return;
+    const nm = rosterMap(S.exams[r.examId])[r.studentId];
+    if (nm) { r.name = nm; Store.put('res', r); n++; }
+  });
+  return n;
+}
+function basePanel(where) {
+  const m = baseMap(), n = Object.keys(m).length, exLists = Object.values(S.exams).reduce((a, ex) => a + Object.keys(parseRoster(ex.roster)).length, 0);
+  const q = normName(S.bq || '');
+  const rows = Object.entries(m).filter(([k, v]) => !q || k.includes(q) || normName(v).includes(q)).sort((a, b) => a[1].localeCompare(b[1], 'es'));
+  const head = `<div class="row" style="justify-content:space-between;align-items:flex-start">
+      <div><h3>Base de alumnos <span class="count-pill">${n}</span></h3>
+      <p class="muted small" style="margin:2px 0 0">${where === 'home' ? 'Súbela una sola vez: se usa en <b>todas</b> las evaluaciones, simulacros UNI e IEN. Al escanear, el nombre sale solo según el DNI marcado.' : 'Esta evaluación usa la <b>base general de alumnos</b>; no hace falta volver a subirla.'}${Cloud.on ? ' Está en la nube: la ven todos los tutores.' : ''}</p></div>
+      <div class="row"><label class="btn sm ${n ? '' : 'primary'}">${n ? 'Actualizar base' : 'Importar base (Excel o CSV)'}<input type="file" accept=".xlsx,.csv,.txt" data-import="base" class="hidden"></label><button class="btn sm" data-act="rostertpl">Plantilla</button>${n ? '<button class="btn sm" data-act="basecsv">Descargar base</button>' : ''}</div></div>`;
+  if (where !== 'home') return head;
+  return `<div class="panel base-panel">${head}
+    ${!n && exLists ? `<div class="note small">Tus evaluaciones ya tienen listas de alumnos (${exLists}). <button class="btn sm primary" data-act="basemerge">Crear la base con esas listas</button></div>` : ''}
+    ${n ? `<details class="base-list" ${S.baseOpen ? 'open' : ''}><summary data-act="baseopen">Ver y buscar alumnos</summary>
+      <input type="text" id="bsearch" placeholder="Buscar por nombre o DNI" value="${esc(S.bq || '')}" style="max-width:320px;margin:10px 0">
+      <div class="scroll-x" style="max-height:340px;overflow:auto"><table class="res"><thead><tr><th>DNI</th><th>Alumno</th><th></th></tr></thead><tbody>
+      ${rows.slice(0, 400).map(([k, v]) => `<tr><td>${esc(k)}</td><td>${esc(v)}</td><td><button class="btn sm ghost" data-act="basedel" data-k="${esc(k)}" aria-label="Quitar">✕</button></td></tr>`).join('')}
+      </tbody></table></div>${rows.length > 400 ? `<p class="small muted">Mostrando 400 de ${rows.length}. Usa el buscador.</p>` : ''}
+      <div class="row" style="margin-top:10px"><input type="text" id="baseAddDni" placeholder="DNI" inputmode="numeric" style="width:130px"><input type="text" id="baseAddName" placeholder="Apellidos y nombres" style="flex:1;min-width:200px"><button class="btn sm" data-act="baseadd">Agregar alumno</button>
+      <button class="btn sm danger" data-act="baseclear">Vaciar base</button></div></details>` : ''}
+  </div>`;
 }
 function scaleLabel(ex) { return ex.scale > 0 ? '/' + ex.scale : 'pts'; }
 
@@ -3090,7 +3132,7 @@ function applyPrefs() {
 
 function homeView() {
   const exams = Object.values(S.exams).filter(ex => !ex.groupId).sort((a, b) => b.created - a.created);
-  const groups = Object.values(S.groups).sort((a, b) => b.created - a.created);
+  const groups = realGroups().sort((a, b) => b.created - a.created);
   const cards = exams.map(ex => {
     const rs = examResults(ex);
     const avg = rs.length ? rs.reduce((a, r) => a + grade(ex, r.answers).T.note, 0) / rs.length : null;
@@ -3125,7 +3167,8 @@ function homeView() {
     ${all.length ? `<div class="exam-list">${all.join('')}</div>` : `<div class="panel empty"><h2>Empieza con una evaluación</h2>
       <p class="muted">Elige una evaluación individual o una estilo UNI de 3 evaluaciones. Define cuántas preguntas tiene, qué curso va en cada tramo y cuánto vale cada pregunta. Luego imprime la hoja y escanéala con la cámara.</p>
       <div class="row" style="justify-content:center"><button class="btn primary" data-act="new">Nueva evaluación</button><button class="btn" data-act="example">Ejemplo individual</button><button class="btn" data-act="exampleuni">Ejemplo UNI</button></div></div>`}
-    <div class="panel" style="margin-top:22px"><h3>Respaldo</h3>
+    <div style="margin-top:22px">${basePanel('home')}</div>
+    <div class="panel"><h3>Respaldo</h3>
       <p class="muted small">Guarda todas tus evaluaciones y resultados en un archivo, o recupéralos en otro equipo.</p>
       <div class="row"><button class="btn sm" data-act="backup">Descargar respaldo</button>
       <label class="btn sm">Importar respaldo<input type="file" accept=".json,application/json" id="impFile" class="hidden"></label></div></div>`;
@@ -3161,10 +3204,10 @@ function groupView(g) {
       <label class="f" style="width:150px">Nota aprobatoria<input type="number" id="grpPass" step="any" value="${pass}" data-grp="pass"></label></div>
     <p class="muted small" style="margin-bottom:0">Cada evaluación se configura, se imprime y se escanea por separado. La <b>nota final</b> es el promedio de las ${K} notas (0 a 20); si un estudiante no rinde una, esa nota cuenta como 0. Las notas se juntan por el <b>código</b> del alumno: que marque el mismo en las ${K} hojas.</p></div>
     <div class="uni-grid">${cards}</div>
-    <div class="panel"><h3>Alumnos (para las ${K} evaluaciones)</h3>
-      <p class="muted small">Una línea por alumno: DNI, nombre. Se aplica a las ${K} evaluaciones. Al escanear, el nombre se completa solo según el DNI marcado en la hoja.</p>
-      <div class="row" style="margin-bottom:8px"><label class="btn sm primary">Importar alumnos (Excel o CSV)<input type="file" accept=".xlsx,.csv,.txt" data-import="grp" class="hidden"></label><button class="btn sm" data-act="rostertpl">Descargar plantilla</button><span class="small muted">Encabezados: <b>DNI</b> y <b>Nombre</b></span></div>
-      <textarea id="grpRoster" data-grp="roster" placeholder="70123456, Quispe Mamani Ana">${esc(exs[0] ? exs[0].roster : '')}</textarea></div>
+    <div class="panel">${basePanel('grp')}
+      <details class="base-list" style="margin-top:10px"><summary>Alumnos solo para este simulacro (opcional)</summary>
+      <p class="muted small">Una línea por alumno: DNI, nombre. Se aplica a las ${K} evaluaciones.</p>
+      <textarea id="grpRoster" data-grp="roster" placeholder="70123456, Quispe Mamani Ana">${esc(exs[0] ? exs[0].roster : '')}</textarea></details></div>
     <div class="panel"><div class="row" style="justify-content:space-between">
         <h3>Resultados finales</h3>
         <div class="row"><button class="btn primary" data-act="uniexcel">Exportar Excel UNI</button></div></div>
@@ -3290,11 +3333,11 @@ function configView(ex) {
     <div class="key-grid">${keyHtml}</div>
   </div>
 
-  <div class="panel"><h3>Alumnos</h3>
-    <p class="muted small">Una línea por alumno: DNI, nombre. Al escanear, el nombre se completa solo según el DNI que el alumno marcó en la hoja.</p>
-    <div class="row" style="margin-bottom:8px"><label class="btn sm primary">Importar alumnos (Excel o CSV)<input type="file" accept=".xlsx,.csv,.txt" data-import="ex" class="hidden"></label><button class="btn sm" data-act="rostertpl">Descargar plantilla</button><span class="small muted">Encabezados: <b>DNI</b> y <b>Nombre</b></span></div>
-    <textarea id="roster" data-ex="roster" placeholder="70123456, Quispe Mamani Ana">${esc(ex.roster)}</textarea>
-    <p class="muted small" style="margin-bottom:0">${Object.keys(rosterMap(ex)).length} alumnos en la lista.</p>
+  <div class="panel">${basePanel('exam')}
+    <details class="base-list" style="margin-top:10px" ${parseRoster(ex.roster) && Object.keys(parseRoster(ex.roster)).length ? 'open' : ''}><summary>Alumnos solo para esta evaluación (opcional)</summary>
+      <p class="muted small">Una línea por alumno: DNI, nombre. Se suman a la base general solo en esta evaluación (por ejemplo, un alumno invitado).</p>
+      <textarea id="roster" data-ex="roster" placeholder="70123456, Quispe Mamani Ana">${esc(ex.roster)}</textarea></details>
+    <p class="muted small" style="margin-bottom:0">${Object.keys(rosterMap(ex)).length} alumnos disponibles para esta evaluación.</p>
   </div>
 
   <div class="panel"><h3>Lectura</h3>
@@ -3858,6 +3901,19 @@ document.addEventListener('click', async e => {
     case 'view': S.view = S.view === 'movil' ? 'pc' : 'movil'; Prefs.set('view', S.view); applyPrefs(); render(); window.scrollTo(0, 0); toast(S.view === 'movil' ? 'Formato celular' : 'Formato PC'); break;
     case 'theme': S.theme = isDark() ? 'light' : 'dark'; Prefs.set('theme', S.theme); applyPrefs(); render(); break;
     case 'rostertpl': rosterTemplate(); break;
+    case 'baseopen': e.preventDefault(); S.baseOpen = !S.baseOpen; render(); break;
+    case 'basecsv': saveFile('base-alumnos.csv', '\ufeffDNI;Nombre\n' + Object.entries(baseMap()).sort((a, b) => a[1].localeCompare(b[1], 'es')).map(([k, v]) => `="${k}";${v}`).join('\n')); break;
+    case 'basemerge': {
+      const m = {}; Object.values(S.exams).forEach(x => Object.assign(m, parseRoster(x.roster)));
+      saveBase(m); const f = fillNames(); toast(`Base creada con ${Object.keys(m).length} alumnos${f ? `; ${f} nombres completados` : ''}.`); render(); break;
+    }
+    case 'baseadd': {
+      const dni = ($('#baseAddDni').value || '').replace(/\D/g, ''), nm = ($('#baseAddName').value || '').trim().replace(/[,;\t]/g, ' ');
+      if (dni.length < 6 || nm.length < 2) { toast('Escribe el DNI (solo números) y el nombre.'); break; }
+      saveBase({ ...baseMap(), [dni]: nm }); fillNames(); S.baseOpen = true; toast('Alumno agregado a la base.'); render(); break;
+    }
+    case 'basedel': { const m = { ...baseMap() }; delete m[el.dataset.k]; saveBase(m); S.baseOpen = true; render(); break; }
+    case 'baseclear': if (confirm('¿Vaciar la base de alumnos? Las hojas ya escaneadas conservan sus nombres.')) { saveBase({}); render(); } break;
     case 'backup': saveFile('respaldo-cartillas.json', JSON.stringify({ app: 'lector-cartillas', v: 2, groups: S.groups, exams: S.exams, results: S.results })); break;
   }
 });
@@ -3882,7 +3938,7 @@ document.addEventListener('change', async e => {
   if (t.dataset.keyfile) { const f = t.files[0]; t.value = ''; if (f) await scanKeyFile(f); return; }
   if (t.dataset.import) {
     const f = t.files[0]; t.value = ''; if (!f) return;
-    const target = t.dataset.import === 'grp' && S.grp ? groupExams(S.groups[S.grp]) : [curExam()];
+    const target = t.dataset.import === 'base' ? (S.grp && !S.cur ? groupExams(S.groups[S.grp]) : curExam() ? [curExam()] : []) : t.dataset.import === 'grp' && S.grp ? groupExams(S.groups[S.grp]) : [curExam()];
     await importStudents(f, target.filter(Boolean)); return;
   }
   if (t.id === 'impFile') {
@@ -3926,6 +3982,7 @@ document.addEventListener('change', async e => {
 });
 document.addEventListener('input', e => {
   const t = e.target;
+  if (t.id === 'bsearch') { S.bq = t.value; const pos = t.selectionStart; render(); const x = $('#bsearch'); if (x) { x.focus(); x.setSelectionRange(pos, pos); } return; }
   if (t.id === 'gsearch') { S.gq = t.value; const pos = t.selectionStart; render(); const x = $('#gsearch'); if (x) { x.focus(); x.setSelectionRange(pos, pos); } return; }
   if (t.id === 'search') { S.q = t.value; const pos = t.selectionStart; render(); const s = $('#search'); if (s) { s.focus(); s.setSelectionRange(pos, pos); } }
   if (t.id === 'exThr') $('#thrV').textContent = Math.round(t.value * 100) + '%';
@@ -3961,7 +4018,7 @@ $('#app').innerHTML = '<div class="auth-wrap"><p class="muted">Cargando…</p></
     try { await Cloud.init(cfg); Auth = CloudAuth; await Auth.init(); if (Auth.session) await Cloud.start(); render(); return; }
     catch (err) {
       console.error(err); Cloud.on = false; Auth = LocalAuth;
-      $('#app').innerHTML = `<div class="auth-wrap"><div class="auth-card"><h2>No se pudo conectar a la nube</h2><p class="muted">${esc(err.message || '')}</p><p class="small">Revisa tu internet. Si el problema sigue, el administrador debe revisar la conexión con Supabase.</p><button class="btn primary" onclick="location.reload()">Reintentar</button>${cfg.from === 'navegador' ? ' <button class="btn" onclick="localStorage.removeItem(\'lc_cloud\');location.reload()">Usar sin nube</button>' : ''}</div></div>`;
+      $('#app').innerHTML = `<div class="auth-wrap"><div class="auth-card"><h2>No se pudo conectar a la nube</h2><p class="muted">${esc(err.message || '')}</p>${/failed to fetch|networkerror|load failed/i.test(err.message || '') ? `<p class="small"><b>Lo más común:</b> el proyecto de Supabase se <b>pausó</b> por estar varios días sin uso (pasa en el plan gratis). El administrador debe entrar a supabase.com, abrir el proyecto y tocar <b>Restore project</b>; en unos minutos vuelve a funcionar y los datos no se pierden.</p><p class="small muted">Otras causas: sin internet, un bloqueador de anuncios o una red que bloquea supabase.co.</p>` : '<p class="small">Revisa tu internet. Si el problema sigue, el administrador debe revisar la conexión con Supabase.</p>'}<button class="btn primary" onclick="location.reload()">Reintentar</button>${cfg.from === 'navegador' ? ' <button class="btn" onclick="localStorage.removeItem(\'lc_cloud\');location.reload()">Usar sin nube</button>' : ''}</div></div>`;
       return;
     }
   }
