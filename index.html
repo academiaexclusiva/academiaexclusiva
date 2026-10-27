@@ -190,6 +190,12 @@ table.res tbody tr:hover{background:var(--sunk)}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--graphite);color:#fff;padding:10px 18px;border-radius:999px;z-index:80;font-weight:700;box-shadow:0 8px 20px rgba(0,0,0,.25);max-width:90vw;text-align:center}
 .hidden{display:none!important}
 #printArea{display:none}
+.type-badge.ien{background:#1B2A44;color:#fff;border-color:#1B2A44}
+.exam-card.ien{border-top:4px solid #EF7B1A}
+.choose-card.ien{border-color:#EF7B1A}
+.ien-panel{border-left:5px solid #EF7B1A}
+.pr-dot{display:inline-flex;align-items:center;justify-content:center;min-width:34px;height:26px;padding:0 6px;border-radius:999px;color:#fff;font-weight:700;font-size:.8rem}
+.pr-dot.sm{min-width:26px;height:20px;font-size:.72rem}
 .fav-panel{border-left:5px solid var(--ok)}
 .fav-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
 .fav-chip{display:inline-flex;align-items:center;gap:6px;background:var(--ok-soft);color:var(--ink);border-radius:999px;padding:2px 4px 2px 12px;font-size:.85rem}
@@ -1016,7 +1022,8 @@ function buildReport(D, opts = {}) {
   /* ======================= Hoja 3: Por estudiante (datos base) ======================= */
   const E = B.sheet(NE);
   E.tab = opts.tab || '2F6FDE';
-  const baseCols = ['Puesto', 'Código', 'Estudiante', 'Nota (0-20)', 'Nivel', 'Estado', 'Puntaje', 'Puntaje máximo', 'Correctas', 'Incorrectas', 'En blanco', 'Eficiencia'];
+  const PRS = D.pruebas || [];
+  const baseCols = ['Puesto', 'Código', 'Estudiante', 'Nota (0-20)', 'Nivel', 'Estado', 'Puntaje', 'Puntaje máximo', ...PRS.map((p, k) => `P${k + 1} puntaje`), 'Correctas', 'Incorrectas', 'En blanco', 'Eficiencia'];
   const secFields = ['Puntaje', 'Correctas', 'Incorrectas', 'En blanco', 'Eficiencia', 'Nota (0-20)'];
   const c0 = 1; // columna B
   const col = {}; baseCols.forEach((h, i) => col[h] = c0 + i);
@@ -1086,6 +1093,7 @@ function buildReport(D, opts = {}) {
     E.set(r, col['Nota (0-20)'], s.nota, tdC('0.0', { font: { b: true } }), `IF(${R(col['Puntaje máximo'])}>0,MAX(0,${R(col['Puntaje'])})/${R(col['Puntaje máximo'])}*20,0)`);
     E.set(r, col['Nivel'], lvlOf(s.nota), tdC(), lvlF(R(col['Nota (0-20)'])));
     E.set(r, col['Estado'], s.nota >= pass ? 'Aprobado' : 'Desaprobado', tdC(), `IF(${R(col['Nota (0-20)'])}>=${PASS},"Aprobado","Desaprobado")`);
+    PRS.forEach((pr, k) => E.set(r, col[`P${k + 1} puntaje`], pr.secIdx.reduce((a, j) => a + s.secs[j].score, 0), tdC('General', { font: { b: true } }), pr.secIdx.length ? pr.secIdx.map(j => R(secCol(j, 'Puntaje'))).join('+') : '0'));
     ['Correctas', 'Incorrectas', 'En blanco'].forEach((f, k) => E.set(r, col[f], [s.c, s.w, s.b][k], tdC('0'), secs.length ? secs.map((_, j) => R(secCol(j, f))).join('+') : null));
     E.set(r, col['Eficiencia'], s.eff, tdC('0%'), `IFERROR(${R(col['Correctas'])}/(${R(col['Correctas'])}+${R(col['Incorrectas'])}+${R(col['En blanco'])}),0)`);
     secs.forEach((sc, j) => {
@@ -2438,6 +2446,31 @@ const UNI_EX = [
   { name: 'Matemática', secs: [['Aritmética', 10], ['Álgebra', 10], ['Geometría', 10], ['Trigonometría', 10]] },
   { name: 'Física y Química', secs: [['Física', 20], ['Química', 20]] }
 ];
+/* ===== Examen IEN UNI: una sola hoja de 60 preguntas dividida en pruebas (todo configurable) ===== */
+const IEN_TPL = [
+  { name: 'Prueba 1: Aptitud y Humanidades', secs: [['Razonamiento matemático', 9, 8, -1.6], ['Razonamiento verbal', 9, 8, -1.6], ['Humanidades', 8, 7, -1.4]] },
+  { name: 'Prueba 2: Matemática y Ciencias', secs: [['Aritmética', 5, 6, -1.2], ['Álgebra', 5, 6, -1.2], ['Geometría', 5, 6, -1.2], ['Trigonometría', 5, 6, -1.2], ['Física', 7, 6, -1.2], ['Química', 7, 6, -1.2]] }
+];
+const PR_C = ['#2F6FDE', '#C2410C', '#8E44AD', '#0E8C8C'];
+function newIEN(example) {
+  const e = newExam(false);
+  e.type = 'ien'; e.name = example ? 'Simulacro IEN UNI de ejemplo' : 'Simulacro IEN UNI';
+  e.idDigits = 8; e.pruebas = []; e.sections = [];
+  let q = 1, ci = 0;
+  IEN_TPL.forEach((t, k) => {
+    const pr = { id: uid(), name: t.name };
+    e.pruebas.push(pr);
+    t.secs.forEach(([nm, cnt, pts, wrong]) => { e.sections.push({ id: uid(), name: nm, from: q, to: q + cnt - 1, pts, wrong, blank: 0, color: COLORS[ci++ % COLORS.length], prueba: pr.id }); q += cnt; });
+  });
+  e.nQ = q - 1;
+  e.key = Array.from({ length: e.nQ }, () => example ? LET[Math.floor(Math.random() * 5)] : '');
+  if (example) e.roster = '70123456, Quispe Mamani Ana\n70987654, Huamán Torres Luis';
+  Store.put('exam', e);
+  return e;
+}
+const isIEN = ex => ex && ex.type === 'ien';
+const prOf = (ex, id) => (ex.pruebas || []).findIndex(p => p.id === id);
+
 function newGroup(example) {
   const n = Object.values(S.groups).length;
   const g = { id: uid(), type: 'uni', name: example ? 'Simulacro UNI de ejemplo' : 'Simulacro UNI ' + (n + 1), exams: [], pass: 11, created: Date.now() };
@@ -2518,7 +2551,12 @@ function grade(ex, answers) {
   const secs = [...map.values()].filter(g => g.sec !== GEN || g.n > 0);
   secs.forEach(g => { g.eff = g.n ? g.c / g.n : 0; g.note = toNote(g.score, g.max); });
   T.eff = T.n ? T.c / T.n : 0; T.note = toNote(T.score, T.max);
-  return { T, secs, per };
+  const pruebas = (ex.pruebas || []).map((pr, k) => {
+    const o = { pr, k, score: 0, max: 0, c: 0, w: 0, b: 0, n: 0 };
+    secs.forEach(g => { if (g.sec.prueba === pr.id) ['score', 'max', 'c', 'w', 'b', 'n'].forEach(f => o[f] += g[f]); });
+    o.eff = o.n ? o.c / o.n : 0; o.note = toNote(o.score, o.max); return o;
+  });
+  return { T, secs, per, pruebas };
 }
 const passes = (ex, note) => ex.scale > 0 ? note >= +ex.pass : true;
 /* ===== Importar base de datos de alumnos (Excel .xlsx o CSV) con encabezados DNI y Nombre ===== */
@@ -3056,8 +3094,8 @@ function homeView() {
   const cards = exams.map(ex => {
     const rs = examResults(ex);
     const avg = rs.length ? rs.reduce((a, r) => a + grade(ex, r.answers).T.note, 0) / rs.length : null;
-    return `<button class="exam-card" data-act="open" data-id="${ex.id}">
-      <span class="type-badge">Individual</span>
+    return `<button class="exam-card ${isIEN(ex) ? 'ien' : ''}" data-act="open" data-id="${ex.id}">
+      ${isIEN(ex) ? `<span class="type-badge ien">IEN UNI · ${(ex.pruebas || []).length} pruebas · ${ex.nQ} preguntas</span>` : '<span class="type-badge">Individual</span>'}
       <h3>${esc(ex.name)}</h3>
       <div class="small muted">${ex.nQ} preguntas, ${ex.sections.length || 'sin'} curso${ex.sections.length === 1 ? '' : 's'}</div>
       <div class="stats"><span><b>${rs.length}</b>hojas</span><span><b>${avg == null ? '–' : fmt(avg)}</b>promedio</span><span><b>${ex.key.filter(Boolean).length}</b>con clave</span></div>
@@ -3076,11 +3114,12 @@ function homeView() {
   const all = [...gcards, ...cards];
   return `<div class="row" style="justify-content:space-between">
       <h2>Evaluaciones</h2>
-      <div class="row"><button class="btn primary" data-act="new">Nueva evaluación</button><button class="btn" data-act="example">Ejemplo individual</button><button class="btn" data-act="exampleuni">Ejemplo UNI</button></div>
+      <div class="row"><button class="btn primary" data-act="new">Nueva evaluación</button><button class="btn" data-act="example">Ejemplo individual</button><button class="btn" data-act="exampleuni">Ejemplo UNI</button><button class="btn" data-act="exampleien">Ejemplo IEN UNI</button></div>
     </div>
     ${S.chooseType ? `<div class="panel choose"><h3>¿Qué tipo de evaluación?</h3>
       <div class="choose-grid">
         <button class="choose-card" data-act="newind"><b>Evaluación individual</b><span>Un examen con su clave, cursos y puntaje. Resultados y Excel de ese examen.</span></button>
+        <button class="choose-card ien" data-act="newien"><b>IEN UNI</b><span>Ingreso Escolar Nacional: una hoja de 60 preguntas dividida en pruebas (Aptitud y Humanidades, Matemática y Ciencias), con puntaje por prueba y total. Todo se puede configurar.</span></button>
         <button class="choose-card uni" data-act="newuni"><b>Estilo UNI</b><span>3 evaluaciones que se rinden por separado y se promedian en una nota final, con puntaje acumulado y ranking.</span></button>
       </div><button class="btn ghost sm" data-act="canceltype" style="margin-top:10px">Cancelar</button></div>` : ''}
     ${all.length ? `<div class="exam-list">${all.join('')}</div>` : `<div class="panel empty"><h2>Empieza con una evaluación</h2>
@@ -3165,6 +3204,29 @@ function sectionWarnings(ex) {
   return w;
 }
 
+function pruebasPanel(ex) {
+  const g = grade(ex, []);
+  const rows = (ex.pruebas || []).map((pr, k) => {
+    const secs = ex.sections.filter(s => s.prueba === pr.id);
+    const qs = secs.reduce((a, s) => a + Math.max(0, Math.min(+s.to, ex.nQ) - +s.from + 1), 0);
+    const rng = secs.length ? `${Math.min(...secs.map(s => +s.from))}–${Math.max(...secs.map(s => +s.to))}` : '—';
+    return `<tr><td><span class="pr-dot" style="background:${PR_C[k % PR_C.length]}">P${k + 1}</span></td>
+      <td><input type="text" value="${esc(pr.name)}" data-prueba="${k}" data-pf="name" id="prn${k}" aria-label="Nombre de la prueba" style="min-width:220px"></td>
+      <td class="num"><input type="number" min="0" max="600" value="${pr.min ?? ''}" placeholder="—" data-prueba="${k}" data-pf="min" id="prm${k}" aria-label="Minutos"></td>
+      <td>${secs.length ? secs.map(s => esc(s.name)).join(', ') : '<span class="muted">Ningún curso: asígnalos en la tabla de abajo</span>'}</td>
+      <td class="small">${qs} preg. · ${rng}</td><td><b>${fmt(g.pruebas[k] ? g.pruebas[k].max : 0)}</b> pts</td>
+      <td>${(ex.pruebas || []).length > 1 ? `<button class="btn ghost sm" data-act="delprueba" data-i="${k}" aria-label="Quitar prueba">✕</button>` : ''}</td></tr>`;
+  }).join('');
+  const total = g.pruebas.reduce((a, x) => a + x.max, 0), loose = ex.sections.filter(s => !s.prueba).length;
+  return `<div class="panel ien-panel"><h3>Pruebas del examen IEN UNI</h3>
+    <p class="muted small">Todo el examen va en una sola hoja de ${ex.nQ} preguntas. Cada prueba agrupa cursos; el puntaje de la prueba es la suma de sus cursos. Cambia nombres, minutos, cursos, rangos y puntajes como quieras.</p>
+    <div class="scroll-x"><table class="sec-table"><thead><tr><th></th><th>Prueba</th><th>Minutos</th><th>Cursos</th><th>Preguntas</th><th>Puntaje máx.</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="small" style="margin:8px 0 0">Puntaje máximo total: <b>${fmt(total)}</b> puntos${loose ? ` · <span style="color:var(--warn);font-weight:700">${loose} curso(s) sin prueba</span>` : ''}</p>
+    <div class="row" style="margin-top:10px"><button class="btn sm" data-act="addprueba">Agregar prueba</button>
+      <button class="btn sm ghost" data-act="ientpl" title="Vuelve a poner las pruebas y cursos de la plantilla IEN">Restaurar plantilla IEN</button></div>
+  </div>`;
+}
+
 function configView(ex) {
   const hasRes = examResults(ex).length > 0;
   const warn = sectionWarnings(ex);
@@ -3176,6 +3238,7 @@ function configView(ex) {
     <td class="num"><input type="number" step="any" value="${s.pts}" data-sec="${i}" data-f="pts" id="sp${i}" aria-label="Puntos por correcta"></td>
     <td class="num"><input type="number" step="any" value="${s.wrong}" data-sec="${i}" data-f="wrong" id="sw${i}" aria-label="Puntos por incorrecta"></td>
     <td class="num"><input type="number" step="any" value="${s.blank}" data-sec="${i}" data-f="blank" id="sb${i}" aria-label="Puntos en blanco"></td>
+    ${isIEN(ex) ? `<td><select data-sec="${i}" data-f="prueba" aria-label="Prueba del curso" style="min-width:150px">${(ex.pruebas || []).map((pr, k) => `<option value="${pr.id}" ${s.prueba === pr.id ? 'selected' : ''}>P${k + 1} · ${esc(pr.name.replace(/^Prueba\s*\d+\s*:?\s*/i, ''))}</option>`).join('')}<option value="" ${!s.prueba ? 'selected' : ''}>Sin prueba</option></select></td>` : ''}
     <td><button class="btn ghost sm" data-act="delsec" data-i="${i}" aria-label="Quitar curso">✕</button></td></tr>`).join('');
   let keyHtml = '', lastSec = null;
   for (let i = 0; i < ex.nQ; i++) {
@@ -3202,9 +3265,10 @@ function configView(ex) {
     ${hasRes ? `<p class="note small">Si cambias la cantidad de preguntas o de dígitos, la hoja cambia y las ya impresas dejarán de leerse con esta evaluación.</p>` : ''}
   </div>
 
+  ${isIEN(ex) ? pruebasPanel(ex) : ''}
   <div class="panel"><h3>Cursos y puntaje</h3>
     <p class="muted small">Asigna un tramo de preguntas a cada curso. Los puntos por incorrecta pueden ser negativos (por ejemplo −0.5) si tu examen descuenta.</p>
-    <div class="scroll-x"><table class="sec-table"><thead><tr><th></th><th>Curso</th><th>Desde</th><th>Hasta</th><th>Correcta</th><th>Incorrecta</th><th>En blanco</th><th></th></tr></thead><tbody>${secRows}</tbody></table></div>
+    <div class="scroll-x"><table class="sec-table"><thead><tr><th></th><th>Curso</th><th>Desde</th><th>Hasta</th><th>Correcta</th><th>Incorrecta</th><th>En blanco</th>${isIEN(ex) ? '<th>Prueba</th>' : ''}<th></th></tr></thead><tbody>${secRows}</tbody></table></div>
     ${warn.map(t => `<div class="note small">${esc(t)}</div>`).join('')}
     <div class="row" style="margin-top:10px"><button class="btn sm" data-act="addsec">Agregar curso</button>
       <span class="row small muted">Repartir en <input type="number" min="1" max="20" value="${Math.max(2, ex.sections.length || 5)}" id="splitN" style="width:64px"> cursos iguales <button class="btn sm" data-act="split">Repartir</button></span></div>
@@ -3405,16 +3469,16 @@ function resultsView(ex) {
       <div class="rcards">${list.map((x, i) => `<button class="rcard" data-act="detail" data-id="${x.r.id}">
         <span class="muted" style="font-family:var(--display);font-size:1.3rem;font-weight:700">${i + 1}</span>
         <span><span class="nm">${esc(x.r.name || 'Sin nombre')}</span>${(x.r.doubts || []).length || x.r.idDoubt ? ' <span class="st warn">revisar</span>' : ''}<br><span class="small muted">Código ${esc(x.r.studentId || '—')} · ${x.g.T.c}/${x.g.T.w}/${x.g.T.b} · ${pct(x.g.T.eff)}</span>
-          <span class="chips">${x.g.secs.map(s => `<span class="chip" style="background:${heat(s.eff)}" title="${esc(s.sec.name)}">${esc(s.sec.name.slice(0, 10))} ${fmt(s.note)}</span>`).join('')}</span></span>
+          <span class="chips">${isIEN(ex) ? x.g.pruebas.map(pr => `<span class="chip" style="background:${PR_C[pr.k % PR_C.length]}">P${pr.k + 1} ${fmt(pr.score)}</span>`).join('') : ''}${x.g.secs.map(s => `<span class="chip" style="background:${heat(s.eff)}" title="${esc(s.sec.name)}">${esc(s.sec.name.slice(0, 10))} ${fmt(s.note)}</span>`).join('')}</span></span>
         <span class="note-cell ${passes(ex, x.g.T.note) ? 'pass' : 'fail'}" style="font-size:1.8rem">${fmt(x.g.T.note)}</span></button>`).join('')}</div></div>`;
   }
   return `${fav}<div class="panel"><div class="row" style="justify-content:space-between">
       <input type="text" id="search" placeholder="Buscar por nombre o código" value="${esc(S.q)}" style="max-width:300px">
       <div class="row"><button class="btn sm primary" data-act="excel">Exportar Excel</button><button class="btn sm" data-act="csv">Descargar CSV</button><button class="btn sm" data-act="copy">Copiar para Excel</button></div></div>
-    <div class="scroll-x" style="margin-top:12px"><table class="res"><thead><tr><th>#</th>${th('id', 'Código')}${th('name', 'Alumno')}${th('nota', 'Nota')}<th>Puntaje</th>${th('eff', 'Eficiencia')}<th>C / I / B</th>
+    <div class="scroll-x" style="margin-top:12px"><table class="res"><thead><tr><th>#</th>${th('id', 'Código')}${th('name', 'Alumno')}${th('nota', 'Nota')}<th>Puntaje</th>${(ex.pruebas && isIEN(ex) ? ex.pruebas : []).map((pr, k) => `<th title="${esc(pr.name)}"><span class="pr-dot sm" style="background:${PR_C[k % PR_C.length]}">P${k + 1}</span></th>`).join('')}${th('eff', 'Eficiencia')}<th>C / I / B</th>
       ${secs.map(s => th('s:' + s.sec.id, `<span class="swatch" style="background:${s.sec.color};width:10px;height:10px"></span> ${esc(s.sec.name)}`)).join('')}</tr></thead>
     <tbody>${list.map((x, i) => `<tr data-act="detail" data-id="${x.r.id}"><td class="muted">${i + 1}</td><td>${esc(x.r.studentId || '—')}</td><td>${esc(x.r.name || 'Sin nombre')}${x.r.source === 'virtual' ? ' <span class="st virt">virtual</span>' : ''}${(x.r.doubts || []).length || x.r.idDoubt ? ` <span class="st warn" title="Tiene lecturas por revisar">revisar</span>` : ''}</td>
-      <td class="note-cell ${passes(ex, x.g.T.note) ? 'pass' : 'fail'}">${fmt(x.g.T.note)}</td><td>${fmt(x.g.T.score)} / ${fmt(x.g.T.max)}</td>
+      <td class="note-cell ${passes(ex, x.g.T.note) ? 'pass' : 'fail'}">${fmt(x.g.T.note)}</td><td>${fmt(x.g.T.score)} / ${fmt(x.g.T.max)}</td>${isIEN(ex) ? x.g.pruebas.map(pr => `<td title="${esc(pr.pr.name)}"><b>${fmt(pr.score)}</b> <span class="muted small">/ ${fmt(pr.max)}</span></td>`).join('') : ''}
       <td><span class="eff-cell" style="${effStyle(x.g.T.eff)}">${pct(x.g.T.eff)}</span></td><td class="muted">${x.g.T.c} / ${x.g.T.w} / ${x.g.T.b}</td>
       ${x.g.secs.map(s => `<td title="${s.c} de ${s.n} correctas">${fmt(s.note)} <span class="eff-cell" style="${effStyle(s.eff)}">${pct(s.eff)}</span></td>`).join('')}</tr>`).join('')}</tbody></table></div>
     <p class="muted small">Nota por curso en la misma escala (${ex.scale > 0 ? 'sobre ' + ex.scale : 'puntaje'}) y su eficiencia (preguntas correctas del curso). Toca una fila para ver la hoja.</p></div>`;
@@ -3465,6 +3529,9 @@ function statsView(ex) {
       ${ex.scale > 0 ? `<div class="kpi"><b>${nPass}</b><span>aprobados (${pct(nPass / n)})</span></div>` : ''}
       <div class="kpi"><b>${fmt(sd)}</b><span>desviación estándar</span></div>
     </div>
+    ${isIEN(ex) && rows[0].g.pruebas.length ? `<div class="panel ien-panel"><h3>Puntaje por prueba</h3><p class="muted small">Promedio del salón en cada prueba, sobre su puntaje máximo.</p><div class="bars">${rows[0].g.pruebas.map((pr0, k) => {
+      const av = rows.reduce((a, x) => a + x.g.pruebas[k].score, 0) / rows.length, c = rows.reduce((a, x) => a + x.g.pruebas[k].c, 0), t = rows.reduce((a, x) => a + x.g.pruebas[k].n, 0);
+      return `<div class="bar-row"><span class="lbl" title="${esc(pr0.pr.name)}">P${k + 1} · ${esc(pr0.pr.name.replace(/^Prueba\s*\d+\s*:?\s*/i, ''))}</span><span class="track"><i style="width:${pr0.max ? Math.max(0, av) / pr0.max * 100 : 0}%;background:${PR_C[k % PR_C.length]}"></i></span><span class="val">${fmt(av)}</span><span class="sub">Promedio ${fmt(av)} de ${fmt(pr0.max)} pts · eficiencia ${pct(t ? c / t : 0)}</span></div>`; }).join('')}</div></div>` : ''}
     <div class="two">
       <div class="panel"><h3>Eficiencia por curso</h3><p class="muted small">Porcentaje de respuestas correctas del curso, sumando a todos los alumnos.</p>
         <div class="bars">${secs.map(x => `<div class="bar-row"><span class="lbl" title="${esc(x.s.name)}"><span class="swatch" style="background:${x.s.color};width:10px;height:10px"></span> ${esc(x.s.name)}</span>
@@ -3530,6 +3597,7 @@ function detailView() {
         <div class="big-note ${passes(ex, g.T.note) ? 'pass' : 'fail'}">${fmt(g.T.note)}<small> ${scaleLabel(ex)}</small></div>
         <p style="margin:6px 0 0">${fmt(g.T.score)} de ${fmt(g.T.max)} puntos · eficiencia <b>${pct(g.T.eff)}</b></p>
         <p class="muted small" style="margin:2px 0 14px">${g.T.c} correctas, ${g.T.w} incorrectas, ${g.T.b} en blanco · puesto ${rowsFor(ex).sort((a, b) => b.g.T.score - a.g.T.score).findIndex(x => x.r.id === r.id) + 1} de ${list.length}</p>
+        ${isIEN(ex) && g.pruebas.length ? `<h3>Por prueba</h3><div class="bars" style="margin-bottom:16px">${g.pruebas.map(pr => `<div class="bar-row"><span class="lbl" title="${esc(pr.pr.name)}">P${pr.k + 1} · ${esc(pr.pr.name.replace(/^Prueba\s*\d+\s*:?\s*/i, ''))}</span><span class="track"><i style="width:${pr.max ? Math.max(0, pr.score) / pr.max * 100 : 0}%;background:${PR_C[pr.k % PR_C.length]}"></i></span><span class="val">${fmt(pr.score)}</span><span class="sub">${fmt(pr.score)} de ${fmt(pr.max)} pts · ${pr.c}/${pr.n} correctas (${pct(pr.eff)})</span></div>`).join('')}</div>` : ''}
         <h3>Por curso</h3>
         <div class="bars">${g.secs.map(s => `<div class="bar-row"><span class="lbl" title="${esc(s.sec.name)}">${esc(s.sec.name)}</span><span class="track"><i style="width:${s.eff * 100}%;background:${s.sec.color}"></i></span><span class="val">${fmt(s.note)}</span><span class="sub">${s.c}/${s.n} correctas (${pct(s.eff)}) · ${fmt(s.score)} de ${fmt(s.max)} pts</span></div>`).join('')}</div>
         <div class="row" style="margin-top:18px"><button class="btn danger sm" data-act="delres">Eliminar hoja</button></div>
@@ -3568,7 +3636,8 @@ function excelData(ex) {
     const most = Object.entries(cnt).sort((a, b) => b[1] - a[1])[0];
     return { q: i + 1, sec: secOf(ex, i + 1).name, p: ok / n, key: k, most: most ? most[0] : '' };
   }).filter(Boolean).sort((a, b) => a.p - b.p).slice(0, 5);
-  return { exam: ex.name, date: new Date().toLocaleDateString('es-PE'), nQ: ex.nQ, pass20: ex.scale > 0 ? +ex.pass * 20 / ex.scale : 11, sections, students, hard };
+  const pruebas = isIEN(ex) ? (ex.pruebas || []).map(pr => ({ name: pr.name, secIdx: base.map((g, j) => g.sec.prueba === pr.id ? j : -1).filter(j => j >= 0) })) : [];
+  return { exam: ex.name, date: new Date().toLocaleDateString('es-PE'), nQ: ex.nQ, pass20: ex.scale > 0 ? +ex.pass * 20 / ex.scale : 11, sections, students, hard, pruebas };
 }
 
 function tableData(ex) {
@@ -3649,6 +3718,20 @@ document.addEventListener('click', async e => {
     case 'newind': { S.chooseType = false; const n = newExam(false); S.cur = n.id; S.tab = 'config'; render(); break; }
     case 'newuni': { S.chooseType = false; const g = newGroup(false); S.grp = g.id; S.cur = null; render(); toast('Simulacro UNI creado: configura cada una de las 3 evaluaciones.'); break; }
     case 'canceltype': S.chooseType = false; render(); break;
+    case 'newien': { S.chooseType = false; const n = newIEN(false); S.cur = n.id; S.tab = 'config'; render(); toast('Examen IEN UNI creado con 60 preguntas en 2 pruebas. Ajusta pruebas, cursos y puntajes a tu gusto.'); break; }
+    case 'exampleien': { const n = newIEN(true); S.cur = n.id; S.tab = 'config'; render(); toast('Ejemplo IEN UNI creado con clave al azar. Prueba "Escanear" → hoja simulada.'); break; }
+    case 'addprueba': { ex.pruebas = ex.pruebas || []; ex.pruebas.push({ id: uid(), name: `Prueba ${ex.pruebas.length + 1}` }); Store.put('exam', ex); render(); break; }
+    case 'delprueba': {
+      const pr = ex.pruebas[+el.dataset.i]; if (!pr) break;
+      if (!confirm(`¿Quitar "${pr.name}"? Sus cursos quedarán sin prueba (no se borran).`)) break;
+      ex.sections.forEach(s => { if (s.prueba === pr.id) s.prueba = ''; }); ex.pruebas.splice(+el.dataset.i, 1); Store.put('exam', ex); render(); break;
+    }
+    case 'ientpl': {
+      if (!confirm('¿Restaurar la plantilla IEN? Se reemplazan las pruebas y los cursos (la clave y las hojas escaneadas se mantienen).')) break;
+      const t = newIEN(false); ex.pruebas = t.pruebas; ex.sections = t.sections; ex.type = 'ien';
+      if (ex.nQ < t.nQ) { ex.key = Array.from({ length: t.nQ }, (_, i) => ex.key[i] || ''); ex.nQ = t.nQ; }
+      delete S.exams[t.id]; Store.del('exam', t.id); Store.put('exam', ex); render(); break;
+    }
     case 'exampleuni': { const g = newGroup(true); S.grp = g.id; S.cur = null; render(); toast('Ejemplo UNI creado con claves al azar. Abre cada evaluación y prueba "hoja simulada".'); break; }
     case 'uniDetail': { const g = S.groups[S.grp], r = uniRows(g).find(x => x.key === el.dataset.key); const p = r && r.per.find(x => x.in); if (p) { S.detail = p.rid; S.detView = 'img'; render(); } break; }
     case 'uniexcel': {
@@ -3674,6 +3757,7 @@ document.addEventListener('click', async e => {
     case 'open': S.cur = el.dataset.id; S.tab = 'config'; S.log = []; S.item = null; render(); break;
     case 'tab': S.camResult = null; if (el.dataset.tab !== 'scan') Cam.stop(); S.tab = el.dataset.tab; render(); window.scrollTo(0, 0); break;
     case 'addsec': {
+      if (isIEN(ex)) setTimeout(() => { const s2 = ex.sections[ex.sections.length - 1]; if (s2 && s2.prueba === undefined && ex.pruebas.length) { s2.prueba = ex.pruebas[ex.pruebas.length - 1].id; Store.put('exam', ex); render(); } }, 0);
       const used = ex.sections.reduce((m, s) => Math.max(m, +s.to || 0), 0);
       const from = Math.min(ex.nQ, used + 1), to = Math.min(ex.nQ, from + 4);
       ex.sections.push({ id: uid(), name: 'Curso ' + (ex.sections.length + 1), from, to, pts: 1, wrong: 0, blank: 0, color: COLORS[ex.sections.length % COLORS.length] });
@@ -3819,6 +3903,11 @@ document.addEventListener('change', async e => {
     if (f === 'nQ') { v = Math.max(1, Math.min(100, Math.round(v) || 1)); ex.key = Array.from({ length: v }, (_, i) => ex.key[i] || ''); }
     if (f === 'idDigits') v = Math.max(0, Math.min(10, Math.round(v) || 0));
     ex[f] = v; Store.put('exam', ex); render(); return;
+  }
+  if (t.dataset.prueba !== undefined && ex && ex.pruebas) {
+    const pr = ex.pruebas[+t.dataset.prueba]; if (!pr) return;
+    pr[t.dataset.pf] = t.dataset.pf === 'min' ? (t.value === '' ? null : +t.value) : (t.value.trim() || pr.name);
+    Store.put('exam', ex); render(); return;
   }
   if (t.dataset.sec !== undefined) {
     const s = ex.sections[+t.dataset.sec], f = t.dataset.f;
