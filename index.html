@@ -190,6 +190,9 @@ table.res tbody tr:hover{background:var(--sunk)}
 .toast{position:fixed;left:50%;bottom:calc(20px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);background:var(--graphite);color:#fff;padding:10px 18px;border-radius:999px;z-index:80;font-weight:700;box-shadow:0 8px 20px rgba(0,0,0,.25);max-width:90vw;text-align:center}
 .hidden{display:none!important}
 #printArea{display:none}
+.sync-btn{background:none;border:0;color:#FFB4A8;font:inherit;font-size:.8rem;cursor:pointer;padding:4px 6px;border-radius:999px;display:inline-flex;align-items:center}
+.sync-btn:hover{background:rgba(255,255,255,.1);color:#fff}
+.live-dot.wait{background:#F2BE2C;box-shadow:none;animation:pulse 1.2s infinite}
 .base-panel{border-left:5px solid #2F6FDE}
 .count-pill{display:inline-block;font-family:var(--body);font-size:.8rem;font-weight:700;background:var(--sunk);border:1px solid var(--line);border-radius:999px;padding:1px 10px;vertical-align:middle;margin-left:4px}
 .base-list summary{cursor:pointer;font-weight:700;margin-top:10px}
@@ -1826,17 +1829,46 @@ const Cloud = {
     } catch (e) { return 'No se pudo conectar: ' + e.message; }
   },
   /* ---- datos compartidos ---- */
-  async start() {
+  // Carga (o vuelve a cargar) todos los datos; si falla, conserva lo que ya se veía en pantalla
+  async start(refresh) {
     if (!this.on) return;
-    this.loading = true; S.exams = {}; S.results = {}; S.groups = {}; render();
+    if (!refresh) { this.loading = true; S.exams = {}; S.results = {}; S.groups = {}; render(); }
     const all = []; let from = 0;
     for (; ;) {
-      const { data, error } = await this.sb.from('docs').select('id,kind,data').order('id').range(from, from + 999);
-      if (error) { this.loading = false; this.status = 'error'; toast('No se pudieron cargar los datos de la nube: ' + error.message); render(); return; }
+      let data, error;
+      try { ({ data, error } = await this.sb.from('docs').select('id,kind,data').order('id').range(from, from + 999)); } catch (e) { error = e; }
+      if (error) {
+        this.loading = false; this.status = 'error'; this.loadErr = error.message || String(error);
+        if (!refresh) toast('No se pudieron cargar los datos de la nube: ' + this.loadErr);
+        this.retryLater(); render(); return false;
+      }
       all.push(...data); if (data.length < 1000) break; from += 1000;
     }
-    all.forEach(row => this.apply(row.kind, row.data));
-    this.loading = false; this.subscribe(); Store.saveLocal(); render();
+    const ex = {}, rs = {}, gr = {};
+    all.forEach(row => { const m = row.kind === 'exam' ? ex : row.kind === 'res' ? rs : row.kind === 'grp' ? gr : null; if (m && row.data && row.data.id) m[row.data.id] = row.data; });
+    // si alguien está escribiendo, no se pisan sus cambios todavía sin guardar
+    Object.keys(this.timers).forEach(id => { const i = id.indexOf('_'), k = id.slice(0, i), oid = id.slice(i + 1), cur = this.map(k); const m = k === 'exam' ? ex : k === 'res' ? rs : gr; if (cur && cur[oid]) m[oid] = cur[oid]; });
+    S.exams = ex; S.results = rs; S.groups = gr;
+    this.loading = false; this.loadErr = null; this.tries = 0;
+    this.subscribe(); Store.saveLocal();
+    if (refresh) this.later(); else render();
+    return true;
+  },
+  // Reconexión automática: tras un corte (equipo suspendido, cambio de wifi, pestaña inactiva) vuelve a cargar y escuchar
+  retryLater() {
+    clearTimeout(this.rtTimer);
+    this.tries = (this.tries || 0) + 1;
+    const wait = Math.min(60000, 4000 * Math.pow(2, this.tries - 1));
+    this.rtTimer = setTimeout(() => this.reconnect(), wait);
+  },
+  async reconnect(manual) {
+    if (!this.on || this.reconnecting || (typeof Auth !== 'undefined' && !Auth.session)) return;
+    this.reconnecting = true; this.status = 'connecting';
+    const el = document.querySelector('.sync'); if (el) el.innerHTML = syncLabel();
+    try { await this.sb.auth.getSession(); } catch (e) { }
+    const ok = await this.start(true);
+    this.reconnecting = false;
+    if (manual) toast(ok ? 'Conexión recuperada.' : 'Sigue sin conexión: ' + (this.loadErr || 'revisa tu internet'));
   },
   stop() { if (this.chan) { this.sb.removeChannel(this.chan); this.chan = null; } this.status = 'off'; S.exams = {}; S.results = {}; S.groups = {}; S.quizzes = {}; S.intentos = {}; },
   map(kind) { return kind === 'exam' ? S.exams : kind === 'res' ? S.results : kind === 'grp' ? S.groups : null; },
@@ -1859,7 +1891,13 @@ const Cloud = {
         if (p.eventType !== 'DELETE' && S.intentos[row.quiz_id]) S.intentos[row.quiz_id].push(row);
         this.later();
       })
-      .subscribe(st => { this.status = st === 'SUBSCRIBED' ? 'live' : (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') ? 'error' : this.status; const el = document.querySelector('.sync'); if (el) el.innerHTML = syncLabel(); });
+      .subscribe(st => {
+        const prev = this.status;
+        this.status = st === 'SUBSCRIBED' ? 'live' : (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT' || st === 'CLOSED') ? 'error' : this.status;
+        if (this.status === 'live') this.tries = 0;
+        if (this.status === 'error' && prev !== 'error' && !this.reconnecting) this.retryLater();
+        const el = document.querySelector('.sync'); if (el) el.innerHTML = syncLabel();
+      });
   },
   // vuelve a dibujar sin interrumpir a quien está escribiendo
   later() {
@@ -1906,7 +1944,18 @@ document.addEventListener('focusout', () => setTimeout(() => {
 function syncLabel() {
   if (!Cloud.on) return S.synced ? 'Guardado en tu cuenta' : 'Guardado en este navegador';
   if (Cloud.loading) return 'Cargando datos…';
-  return Cloud.status === 'live' ? '<span class="live-dot"></span>En la nube · en vivo' : Cloud.status === 'error' ? '<span class="live-dot off"></span>Sin conexión en vivo' : 'Conectando…';
+  return Cloud.status === 'live' ? '<span class="live-dot"></span>En la nube · en vivo' : Cloud.status === 'error' ? '<button class="sync-btn" data-act="cloudretry" title="Reconectar ahora"><span class="live-dot off"></span>Sin conexión · Reconectar</button>' : '<span class="live-dot wait"></span>Reconectando…';
+}
+// al volver a la pestaña, al recuperar internet o cada minuto: si se cayó la conexión, se reconecta sola
+window.addEventListener('online', () => { if (Cloud.on && Cloud.status !== 'live') Cloud.reconnect(); });
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible' && Cloud.on && Cloud.status !== 'live') Cloud.reconnect(); });
+setInterval(() => { if (Cloud.on && Cloud.status === 'error' && navigator.onLine !== false) Cloud.reconnect(); }, 60000);
+function cloudErrBanner() {
+  if (!Cloud.on || !Cloud.loadErr) return '';
+  const paused = /failed to fetch|networkerror|load failed/i.test(Cloud.loadErr), jwt = /jwt|token|expired|401/i.test(Cloud.loadErr);
+  return `<div class="note bad"><b>No se pudieron cargar los datos de la nube.</b> Tus evaluaciones no se perdieron: siguen guardadas en Supabase.<br>
+    <span class="small">${paused ? 'Puede ser un corte de internet o que el proyecto de Supabase esté pausado (el administrador lo reactiva con <b>Restore project</b> en supabase.com).' : jwt ? 'Tu sesión venció. Sal y vuelve a entrar.' : esc(Cloud.loadErr)}</span>
+    <div class="row" style="margin-top:8px"><button class="btn sm primary" data-act="cloudretry">Reintentar ahora</button>${jwt ? '<button class="btn sm" data-act="logout">Volver a entrar</button>' : ''}</div></div>`;
 }
 
 /* ---------- Usuarios en la nube (Supabase Auth) ---------- */
@@ -3154,7 +3203,7 @@ function homeView() {
     </button>`;
   });
   const all = [...gcards, ...cards];
-  return `<div class="row" style="justify-content:space-between">
+  return `${cloudErrBanner()}<div class="row" style="justify-content:space-between">
       <h2>Evaluaciones</h2>
       <div class="row"><button class="btn primary" data-act="new">Nueva evaluación</button><button class="btn" data-act="example">Ejemplo individual</button><button class="btn" data-act="exampleuni">Ejemplo UNI</button><button class="btn" data-act="exampleien">Ejemplo IEN UNI</button></div>
     </div>
@@ -3901,6 +3950,7 @@ document.addEventListener('click', async e => {
     case 'view': S.view = S.view === 'movil' ? 'pc' : 'movil'; Prefs.set('view', S.view); applyPrefs(); render(); window.scrollTo(0, 0); toast(S.view === 'movil' ? 'Formato celular' : 'Formato PC'); break;
     case 'theme': S.theme = isDark() ? 'light' : 'dark'; Prefs.set('theme', S.theme); applyPrefs(); render(); break;
     case 'rostertpl': rosterTemplate(); break;
+    case 'cloudretry': Cloud.reconnect(true); break;
     case 'baseopen': e.preventDefault(); S.baseOpen = !S.baseOpen; render(); break;
     case 'basecsv': saveFile('base-alumnos.csv', '\ufeffDNI;Nombre\n' + Object.entries(baseMap()).sort((a, b) => a[1].localeCompare(b[1], 'es')).map(([k, v]) => `="${k}";${v}`).join('\n')); break;
     case 'basemerge': {
