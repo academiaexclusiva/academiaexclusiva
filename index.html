@@ -3230,7 +3230,7 @@ function homeView() {
   const all = [...gcards, ...cards];
   return `${cloudErrBanner()}<div class="row" style="justify-content:space-between">
       <h2>Evaluaciones</h2>
-      <div class="row"><button class="btn primary" data-act="new">Nueva evaluación</button><button class="btn" data-act="example">Ejemplo individual</button><button class="btn" data-act="exampleuni">Ejemplo UNI</button><button class="btn" data-act="exampleien">Ejemplo IEN UNI</button></div>
+      <div class="row"><button class="btn primary" data-act="new">Nueva evaluación</button></div>
     </div>
     ${S.chooseType ? `<div class="panel choose"><h3>¿Qué tipo de evaluación?</h3>
       <div class="choose-grid">
@@ -3239,8 +3239,8 @@ function homeView() {
         <button class="choose-card uni" data-act="newuni"><b>Estilo UNI</b><span>3 evaluaciones que se rinden por separado y se promedian en una nota final, con puntaje acumulado y ranking.</span></button>
       </div><button class="btn ghost sm" data-act="canceltype" style="margin-top:10px">Cancelar</button></div>` : ''}
     ${all.length ? `<div class="exam-list">${all.join('')}</div>` : `<div class="panel empty"><h2>Empieza con una evaluación</h2>
-      <p class="muted">Elige una evaluación individual o una estilo UNI de 3 evaluaciones. Define cuántas preguntas tiene, qué curso va en cada tramo y cuánto vale cada pregunta. Luego imprime la hoja y escanéala con la cámara.</p>
-      <div class="row" style="justify-content:center"><button class="btn primary" data-act="new">Nueva evaluación</button><button class="btn" data-act="example">Ejemplo individual</button><button class="btn" data-act="exampleuni">Ejemplo UNI</button></div></div>`}
+      <p class="muted">Elige una evaluación individual, un simulacro estilo UNI de 3 evaluaciones o un examen IEN UNI. Define cuántas preguntas tiene, qué curso va en cada tramo y cuánto vale cada pregunta. Luego imprime la hoja y escanéala con la cámara.</p>
+      <div class="row" style="justify-content:center"><button class="btn primary" data-act="new">Nueva evaluación</button></div></div>`}
     <div style="margin-top:22px">${basePanel('home')}</div>
     <div class="panel"><h3>Respaldo</h3>
       <p class="muted small">Guarda todas tus evaluaciones y resultados en un archivo, o recupéralos en otro equipo.</p>
